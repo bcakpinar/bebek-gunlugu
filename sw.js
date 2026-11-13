@@ -1,7 +1,7 @@
 // Uygulamanın internet zayıfken de açılmasını sağlar.
 // Önce internetten en yeni sürümü dener, olmazsa kayıtlı kopyayı açar.
 // Böylece GitHub'a yüklediğin güncellemeler hemen gelir.
-const CACHE = "bebek-gunlugu-v1";
+const CACHE = "bebek-gunlugu-v2";
 const DOSYALAR = ["./", "./index.html", "./app.js", "./firebase-config.js", "./manifest.webmanifest", "./icons/icon-192.png"];
 
 self.addEventListener("install", e => {

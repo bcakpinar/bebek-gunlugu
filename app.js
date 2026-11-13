@@ -72,11 +72,26 @@ const yaz = p => p.catch(e => showBanner(hataMesaji(e)));
 // ---------- Giriş ----------
 onAuthStateChanged(auth, user => {
   unsubs.forEach(u => u()); unsubs = []; clearInterval(tick);
-  if (!user) { $("#appView").hidden = true; $("#loginView").hidden = false; return; }
+  signedIn = !!user;
+  if (!user) { $("#appView").hidden = true; $("#feedView").hidden = true; $("#loginView").hidden = false; return; }
   myEmail = (user.email || "").toLowerCase();
-  $("#loginView").hidden = true; $("#appView").hidden = false;
+  $("#loginView").hidden = true;
+  showView();
   startData();
 });
+
+// ---------- Sayfalar: ana sayfa ve #beslenme ----------
+let signedIn = false;
+function showView() {
+  if (!signedIn) return;
+  const feed = location.hash === "#beslenme";
+  $("#appView").hidden = feed;
+  $("#feedView").hidden = !feed;
+  confirmId = null;
+  if (feed) renderFeed();
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", showView);
 $("#loginForm").addEventListener("submit", async ev => {
   ev.preventDefault(); $("#lErr").textContent = "";
   try { await signInWithEmailAndPassword(auth, $("#lEmail").value.trim(), $("#lPass").value); }
@@ -95,7 +110,7 @@ function startData() {
   }, e => { loaded = true; showBanner(hataMesaji(e)); renderAll(); }));
   unsubs.push(onSnapshot(profilRef, s => { profile = s.exists() ? s.data() : null; profileLoaded = true; renderHeader(); },
     () => { profileLoaded = true; }));
-  tick = setInterval(() => { if (loaded) renderStatus(); }, 30000);
+  tick = setInterval(() => { if (loaded) { renderStatus(); renderFeed(); } }, 30000);
 }
 
 // ---------- Ekrana çizme ----------
@@ -159,30 +174,70 @@ function renderStatus() {
 }
 
 let confirmId = null;
-function renderTimeline() {
-  const el = $("#timeline");
+const isFeed = e => e.tur === "emzirme" || e.tur === "biberon";
+
+// Bir kayıt listesini güne göre gruplayıp çizer.
+// opts.gunOzeti: gün başlığının yanına yazılacak özet; opts.aralik: bir önceki beslenmeden geçen süre
+function renderList(el, list, emptyText, opts = {}) {
   if (!loaded) { el.innerHTML = `<div class="empty">Kayıtlar yükleniyor…</div>`; return; }
-  if (!entries.length) { el.innerHTML = `<div class="empty">Henüz kayıt yok. Yukarıdaki düğmelerle ilk uykuyu ya da beslenmeyi ekle; eklediğin her şey burada saat sırasıyla görünür.</div>`; return; }
+  if (!list.length) { el.innerHTML = `<div class="empty">${emptyText}</div>`; return; }
   const groups = new Map();
-  entries.forEach(e => { const k = dayStart(e.t); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); });
+  list.forEach(e => { const k = dayStart(e.t); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); });
   let html = "";
-  for (const [k, list] of groups) {
-    html += `<div class="day"><h3>${esc(dayLabel(k))}</h3><div class="list">`;
-    list.forEach(e => {
+  for (const [k, dayList] of groups) {
+    const ozet = opts.gunOzeti ? opts.gunOzeti(dayList) : "";
+    html += `<div class="day"><h3>${esc(dayLabel(k))}${ozet ? ` <small>· ${esc(ozet)}</small>` : ""}</h3><div class="list">`;
+    dayList.forEach(e => {
       const who = kisiAdi(e.by);
       const extra = [who ? esc(who) + " ekledi" : "", e.not ? esc(e.not) : ""].filter(Boolean).join(" · ");
+      let gap = "";
+      if (opts.aralik) { const i = list.indexOf(e), prev = list[i + 1]; if (prev) gap = `<span class="gap">Önceki beslenmeden ${dur((e.t - prev.t) / 60000)} sonra</span>`; }
       const hot = e.tur === "ates" && e.derece >= 38;
       const acts = confirmId === e._id
         ? `<button class="icon danger" data-del="${e._id}">Evet, sil</button><button class="icon" data-cancel>Vazgeç</button>`
         : `<button class="icon" data-edit="${e._id}">Düzenle</button><button class="icon" data-ask="${e._id}">Sil</button>`;
       html += `<div class="row${hot ? " hot" : ""}"><span class="time num">${hm(e.t)}</span><span class="dot d-${e.tur}"></span>
-        <span class="what"><b>${esc(describe(e))}</b>${extra ? `<span class="by">${extra}</span>` : ""}</span><span class="acts">${acts}</span></div>`;
+        <span class="what"><b>${esc(describe(e))}</b>${gap}${extra ? `<span class="by">${extra}</span>` : ""}</span><span class="acts">${acts}</span></div>`;
     });
     html += "</div></div>";
   }
   el.innerHTML = html;
 }
-function renderAll() { renderHeader(); renderStatus(); renderTimeline(); }
+
+function renderTimeline() {
+  renderList($("#timeline"), entries, "Henüz kayıt yok. Yukarıdaki düğmelerle ilk uykuyu ya da beslenmeyi ekle; eklediğin her şey burada saat sırasıyla görünür.");
+  const feeds = entries.filter(isFeed), t0 = dayStart(Date.now());
+  const bugun = feeds.filter(e => e.t >= t0).length;
+  $("#feedLinkSub").textContent = feeds.length ? `Bugün ${bugun} kez · son beslenme ${ago(feeds[0].t)}` : "Emzirme ve biberon listesi";
+}
+
+function feedOzet(list) {
+  const emz = list.filter(e => e.tur === "emzirme"), bib = list.filter(e => e.tur === "biberon");
+  const dk = emz.reduce((s, e) => s + (+e.dk || 0), 0), ml = bib.reduce((s, e) => s + (+e.ml || 0), 0);
+  const parca = [list.length + " beslenme"];
+  if (emz.length) parca.push(emz.length + " emzirme" + (dk ? " (" + dk + " dk)" : ""));
+  if (bib.length) parca.push(bib.length + " biberon" + (ml ? " (" + ml + " ml)" : ""));
+  return parca.join(" · ");
+}
+
+function renderFeed() {
+  if ($("#feedView").hidden) return;
+  const now = Date.now();
+  const feeds = entries.filter(isFeed);
+  const son24 = feeds.filter(e => now - e.t < 24 * 36e5);
+  const ml = son24.reduce((s, e) => s + (e.tur === "biberon" ? (+e.ml || 0) : 0), 0);
+  const dk = son24.reduce((s, e) => s + (e.tur === "emzirme" ? (+e.dk || 0) : 0), 0);
+  let ort = "—";
+  if (son24.length >= 2) ort = dur((son24[0].t - son24[son24.length - 1].t) / (son24.length - 1) / 60000);
+  $("#feedSum").innerHTML = loaded ? `
+    <div class="stat"><div class="k">Beslenme</div><div class="v num">${son24.length} kez</div><div class="s">${feeds.length ? "Son: " + ago(feeds[0].t) : "Kayıt yok"}</div></div>
+    <div class="stat"><div class="k">Ortalama aralık</div><div class="v num">${ort}</div><div class="s">İki beslenme arası</div></div>
+    <div class="stat"><div class="k">Toplam</div><div class="v num">${ml ? ml + " ml" : dk ? dk + " dk" : "—"}</div><div class="s num">${ml && dk ? dk + " dk emzirme" : ml ? "Biberon" : dk ? "Emzirme" : "Miktar girilmedi"}</div></div>` : "";
+  document.querySelectorAll("#feedView .qb").forEach(q => q.disabled = !loaded);
+  renderList($("#feedList"), feeds, "Henüz beslenme kaydı yok. Yukarıdaki düğmelerle ilk emzirme ya da biberonu ekle.", { gunOzeti: feedOzet, aralik: true });
+}
+
+function renderAll() { renderHeader(); renderStatus(); renderTimeline(); renderFeed(); }
 
 // ---------- Kayıt formu ----------
 let form = null;
@@ -249,10 +304,12 @@ $("#sleepBtn").addEventListener("click", () => {
   if (os) yaz(updateDoc(doc(kayitlar, os._id), { end: Date.now() }));
   else yaz(addDoc(kayitlar, { tur: "uyku", t: Date.now(), by: myEmail }));
 });
-$("#timeline").addEventListener("click", ev => {
+function listeTiklama(ev) {
   const b = ev.target.closest("button"); if (!b) return;
   if (b.dataset.edit) { const e = entries.find(x => x._id === b.dataset.edit); if (e) openForm(e.tur, e); }
-  else if (b.dataset.ask) { confirmId = b.dataset.ask; renderTimeline(); }
-  else if (b.hasAttribute("data-cancel")) { confirmId = null; renderTimeline(); }
+  else if (b.dataset.ask) { confirmId = b.dataset.ask; renderTimeline(); renderFeed(); }
+  else if (b.hasAttribute("data-cancel")) { confirmId = null; renderTimeline(); renderFeed(); }
   else if (b.dataset.del) { const id = b.dataset.del; confirmId = null; yaz(deleteDoc(doc(kayitlar, id))); }
-});
+}
+$("#timeline").addEventListener("click", listeTiklama);
+$("#feedList").addEventListener("click", listeTiklama);
