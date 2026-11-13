@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Sadece bu iki e-posta ile giriş yapan kişiler kayıtları görebilir ve ekleyebilir.
+    // Kendi e-postalarınızı KÜÇÜK HARFLE yazın.
+    function izinli() {
+      return request.auth != null
+        && request.auth.token.email in [
+          'senin-epostan@gmail.com',
+          'esinin-epostasi@gmail.com'
+        ];
+    }
+
+    match /{document=**} {
+      allow read, write: if izinli();
+    }
+  }
+}
